@@ -14,27 +14,47 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 12266719
-          accept-android-sdk-licenses: true
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -e
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            echo "Searching for sdkmanager..."
+            SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+              -name sdkmanager -type f 2>/dev/null | head -n 1)
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found."
+            exit 1
+          fi
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --licenses || true
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -e
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Extract Android Studio project
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -e
@@ -42,26 +62,26 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP file not found in repository root."
+            echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
           mkdir -p extracted-project
           unzip -q "$ZIP_FILE" -d extracted-project
 
-          GRADLE_FILE=$(find extracted-project \
+          GRADLE_FILE=$(find extracted-project -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
-            -type f | head -n 1)
+            | head -n 1)
 
           if [ -z "$GRADLE_FILE" ]; then
-            echo "ERROR: settings.gradle was not found in the ZIP."
+            echo "ERROR: Android Gradle settings file not found."
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLE_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project found: $PROJECT_DIR"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Build Android APK
         shell: bash
@@ -72,10 +92,8 @@ jobs:
           if [ -f gradlew ]; then
             chmod +x gradlew
             ./gradlew --no-daemon assembleDebug
-          elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
-            gradle --no-daemon assembleDebug
           else
-            echo "ERROR: Gradle build file was not found."
+            echo "ERROR: Gradle wrapper gradlew not found."
             exit 1
           fi
 
